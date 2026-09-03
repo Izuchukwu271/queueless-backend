@@ -125,6 +125,97 @@ app.post("/queues", async (req, res) => {
     }
 });
 
+app.get("/queues/:business_id", async(req, res)=>{
+    try{
+        const {business_id} = req.params;
+        const result = await pool.query(
+            `SELECT id, business_id, phone, people, ticket, status
+            FROM queues
+            WHERE business_id = $1
+            ORDER BY id ASC
+            `,
+            [business_id]
+        );
+
+        res.status(200).json({
+            business_id: business_id,
+            queue: result.rows
+        });
+    }catch(error){
+        console.error(error);
+
+        res.status(500).json({
+            message:"Failed to get queue"
+        });
+    }
+});
+app.patch("/queues/:business_id/next", async(req, res)=>{
+    try{
+        const {business_id}=req.params;
+
+        const result = await pool.query(
+            `UPDATE queues
+            SET status = 'serving'
+            WHERE id = (
+            SELECT id
+            FROM queues
+            WHERE business_id = $1
+            AND status = 'waiting'
+            ORDER BY id ASC
+            LIMIT 1
+            )
+            RETURNING id, business_id, phone, people, ticket, status`,
+            [business_id]
+            
+        );
+        if(result.rows.length === 0){
+            return res.status(404).json({
+                message: "No customers are waiting."
+            });
+        }
+        res.status(200).json({
+            message:"Customer is now being served",
+            queue: result.rows[0]
+        });
+    }catch(error){
+        console.error(error);
+        res.status(500).json({
+            message:"Failed to serve next customer."
+        });
+    }
+});
+
+app.patch("/queues/:id/complete", async(req, res)=>{
+    try{
+        const {id} = req.params;
+
+        const result = await pool.query(
+            `UPDATE queues
+            SET status = 'completed'
+            WHERE id = $1
+            AND status = 'serving'
+            RETURNING id, business_id, phone, people, ticket, status`,
+            [id]
+        );
+        if(result.rows.length === 0){
+            return res.status(404).json({
+                message: "Customer is not currently being served.",
+            
+            });
+        }
+        res.status(200).json({
+             message: "Customer completed successfully!",
+                queue: result.rows[0]
+        });
+    }catch(error){
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to complete customer."
+        });
+    }
+});
+
 app.listen(PORT, ()=>{
     console.log(`Queueless server running on port ${PORT}`);
-});
+})
