@@ -153,28 +153,61 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
     try{
         const {business_id}=req.params;
 
-        const result = await pool.query(
-            `UPDATE queues
-            SET status = 'serving'
-            WHERE id = (
-            SELECT id
+        //Find a staff available
+        const staffResult = await pool.query(
+            `SELECT id, staff_name
+            FROM staff
+            WHERE business_id = $1
+            AND available = TRUE
+            LIMIT 1`,
+            [business_id]
+        );
+        if(staffResult.rows.length === 0){
+            return res.status(404).json({
+                message: "No staff member is currently available."
+            });
+        }
+        const staff = staffResult.rows[0];
+
+        // find the next waiting customer
+        const queueResult = await pool.query(
+            `SELECT id
             FROM queues
             WHERE business_id = $1
             AND status = 'waiting'
             ORDER BY id ASC
-            LIMIT 1
-            )
-            RETURNING id, business_id, phone, people, ticket, status`,
+            LIMIT 1`,
             [business_id]
-            
         );
-        if(result.rows.length === 0){
+        if(queueResult.rows.length === 0){
             return res.status(404).json({
-                message: "No customers are waiting."
+                message:"No customers are waiting."
             });
         }
+        const customer = queueResult.rows[0];
+
+        // Assign staff and start serving customer
+
+        const result = await pool.query(
+            `UPDATE queues
+            SET status = 'serving',
+              staff_id = $1
+            WHERE id = $2  
+            RETURNING id, business_id, phone, people, ticket, status, staff_id`,
+            [staff.id, customer.id]
+            
+        );
+        // make the staff member unvailable
+        await pool.query(
+            `UPDATE staff
+            SET available = FALSE
+            WHERE id = $1`,
+            [staff.id]
+        );
+
         res.status(200).json({
-            message:"Customer is now being served",
+            message: "Customer is now being served",
+            staff: staff,
             queue: result.rows[0]
         });
     }catch(error){
@@ -212,6 +245,36 @@ app.patch("/queues/:id/complete", async(req, res)=>{
 
         res.status(500).json({
             message: "Failed to complete customer."
+        });
+    }
+});
+app.patch("/queues/:id/cancel", async(req, res)=>{
+    try{
+        const { id } = req.params;
+
+        const result = await pool.query(
+            `UPDATE  queues
+            SET status = 'cancelled'
+            WHERE id = $1
+            AND status = 'waiting'
+            RETURNING id, business_id, phone, people, ticket, status`,
+            [id]
+        );
+
+        if(result.rows.length === 0){
+            return res.status(404).json({
+                message: "Customer is not currently waiting."
+            });
+        }
+        res.status(200).json({
+            message: "Customer cancelled successfully!",
+            queue: result.rows[0]
+        });
+    }catch(error){
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to cancel customer."
         });
     }
 });
