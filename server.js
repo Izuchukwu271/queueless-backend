@@ -227,7 +227,7 @@ app.patch("/queues/:id/complete", async(req, res)=>{
             SET status = 'completed'
             WHERE id = $1
             AND status = 'serving'
-            RETURNING id, business_id, phone, people, ticket, status`,
+            RETURNING id, business_id, phone, people, ticket, status, staff_id`,
             [id]
         );
         if(result.rows.length === 0){
@@ -236,9 +236,19 @@ app.patch("/queues/:id/complete", async(req, res)=>{
             
             });
         }
+        const queue = result.rows[0];
+
+        // make the staff member available again
+
+        await pool.query(
+            `UPDATE staff
+            SET available = TRUE
+            WHERE id = $1`,
+            [queue.staff_id]
+        )
         res.status(200).json({
              message: "Customer completed successfully!",
-                queue: result.rows[0]
+                queue: queue
         });
     }catch(error){
         console.error(error);
