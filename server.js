@@ -150,11 +150,13 @@ app.get("/queues/:business_id", async(req, res)=>{
     }
 });
 app.patch("/queues/:business_id/next", async(req, res)=>{
+    const client = await pool.connect();
     try{
         const {business_id}=req.params;
+        await client.query("BEGIN");
 
         //Find a staff available
-        const staffResult = await pool.query(
+        const staffResult = await client.query(
             `SELECT id, staff_name
             FROM staff
             WHERE business_id = $1
@@ -163,6 +165,8 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
             [business_id]
         );
         if(staffResult.rows.length === 0){
+              await client.query("ROLLBACK");
+
             return res.status(404).json({
                 message: "No staff member is currently available."
             });
@@ -170,7 +174,7 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
         const staff = staffResult.rows[0];
 
         // find the next waiting customer
-        const queueResult = await pool.query(
+        const queueResult = await client.query(
             `SELECT id
             FROM queues
             WHERE business_id = $1
@@ -180,6 +184,7 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
             [business_id]
         );
         if(queueResult.rows.length === 0){
+             await client.query("ROLLBACK");
             return res.status(404).json({
                 message:"No customers are waiting."
             });
@@ -188,7 +193,7 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
 
         // Assign staff and start serving customer
 
-        const result = await pool.query(
+        const result = await client.query(
             `UPDATE queues
             SET status = 'serving',
               staff_id = $1
@@ -198,12 +203,15 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
             
         );
         // make the staff member unvailable
-        await pool.query(
+        await client.query(
             `UPDATE staff
             SET available = FALSE
             WHERE id = $1`,
             [staff.id]
         );
+        // Save both changes permanently
+         await client.query("COMMIT");
+
 
         res.status(200).json({
             message: "Customer is now being served",
@@ -211,10 +219,14 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
             queue: result.rows[0]
         });
     }catch(error){
+        await client.query("ROLLBACK");
+
         console.error(error);
         res.status(500).json({
             message:"Failed to serve next customer."
         });
+    }finally{
+        client.release();
     }
 });
 
