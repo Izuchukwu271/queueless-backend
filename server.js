@@ -219,10 +219,13 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
 });
 
 app.patch("/queues/:id/complete", async(req, res)=>{
+    const client = await pool.connect();
     try{
         const {id} = req.params;
 
-        const result = await pool.query(
+        await client.query("BEGIN");
+
+        const result = await client.query(
             `UPDATE queues
             SET status = 'completed'
             WHERE id = $1
@@ -231,6 +234,8 @@ app.patch("/queues/:id/complete", async(req, res)=>{
             [id]
         );
         if(result.rows.length === 0){
+            await client.query("ROLLBACK");
+
             return res.status(404).json({
                 message: "Customer is not currently being served.",
             
@@ -240,22 +245,29 @@ app.patch("/queues/:id/complete", async(req, res)=>{
 
         // make the staff member available again
 
-        await pool.query(
+        await client.query(
             `UPDATE staff
             SET available = TRUE
             WHERE id = $1`,
             [queue.staff_id]
-        )
+        );
+
+        // commit the transaction here
+        await client.query("COMMIT");
         res.status(200).json({
              message: "Customer completed successfully!",
                 queue: queue
         });
     }catch(error){
+        await client.query("ROLLBACK");
+
         console.error(error);
 
         res.status(500).json({
             message: "Failed to complete customer."
         });
+    }finally{
+        client.release();
     }
 });
 app.patch("/queues/:id/cancel", async(req, res)=>{
