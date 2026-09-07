@@ -63,6 +63,50 @@ app.post("/businesses", async(req, res)=>{
         });
       }
 });
+
+app.post("/login", async(req, res)=>{
+    try{
+        const { phone, password } = req.body;
+
+        const result = await pool.query(
+            `SELECT id, business_name, phone, password
+            FROM businesses
+            WHERE phone =$1`,
+            [phone]
+        );
+        if(result.rows.length === 0){
+            return res.status(404).json({
+                message:"business not found."
+            });
+        }
+        const business = result.rows[0];
+        const passwordMatch = await bcrypt.compare(
+            password,
+            business.password
+        );
+
+        if(!passwordMatch){
+            return res.status(401).json({
+                message: "Incorrect password."
+            });
+        }
+        res.status(200).json({
+            message: "Login successful!",
+            business: {
+                id: business.id,
+                business_name: business.business_name,
+                phone: business.phone
+            }
+        });
+
+    }catch(error){
+        console.error(error);
+
+        res.status(500).json({
+            message: "Login failed."
+        });
+    }
+});
 app.post("/staff", async(req, res)=>{
     try{
         const {business_id, staff_name}= req.body;
