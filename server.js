@@ -1,5 +1,6 @@
 const express = require("express");
 const {Pool} = require("pg");
+const bcrypt = require("bcrypt");
 require("dotenv").config();
 
 const app = express();
@@ -40,13 +41,14 @@ app.get("/test-db", async(req, res)=> {
 app.post("/businesses", async(req, res)=>{
     try{
         const {business_name, phone, password, location} = req.body;
+        const hashedPassword = await bcrypt.hash(password,10);
 
         const result = await pool.query(
     `INSERT INTO businesses
     (business_name, phone, password, location)
     VALUES ($1, $2, $3, $4)
     RETURNING id, business_name, phone, location`,
-    [business_name, phone, password, location]
+    [business_name, phone, hashedPassword, location]
 );
 
         res.status(201).json({
