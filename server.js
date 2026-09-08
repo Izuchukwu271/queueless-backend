@@ -1,6 +1,7 @@
 const express = require("express");
 const {Pool} = require("pg");
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const app = express();
@@ -17,6 +18,28 @@ const pool = new Pool({
     password: process.env.DB_PASSWORD,
     port: process.env.DB_PORT
 });
+
+function authenticateToken(req, res, next){
+    const authHeader = req.headers["authorization"];
+
+    const token = authHeader && authHeader.split(" ")[1];
+
+    if(!token){
+        return res.status(401).json({
+            message: "Access denied. No token provided."
+        });
+    }
+    jwt.verify(token, process.env.JWT_SECRET, (error, business)=>{
+        if(error){
+            return res.status(401).json({
+                message: "Invalid or expired token."
+            });
+        }
+        req.business = business;
+        next();
+
+    });
+}
 // Test route
 app.get("/",(req, res)=>{
     res.send("Queueless backend is running!");
@@ -90,8 +113,19 @@ app.post("/login", async(req, res)=>{
                 message: "Incorrect password."
             });
         }
+        const token = jwt.sign(
+            {
+                id: business.id,
+                phone: business.phone
+            },
+            process.env.JWT_SECRET,
+            {
+                expiresIn:"1d"
+            }
+        );
         res.status(200).json({
             message: "Login successful!",
+            token: token,
             business: {
                 id: business.id,
                 business_name: business.business_name,
@@ -171,7 +205,7 @@ app.post("/queues", async (req, res) => {
     }
 });
 
-app.get("/queues/:business_id", async(req, res)=>{
+app.get("/queues/:business_id",authenticateToken,async(req, res)=>{
     try{
         const {business_id} = req.params;
         const result = await pool.query(
