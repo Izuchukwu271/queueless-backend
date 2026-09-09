@@ -208,6 +208,12 @@ app.post("/queues", async (req, res) => {
 app.get("/queues/:business_id",authenticateToken,async(req, res)=>{
     try{
         const {business_id} = req.params;
+        const tokenBusinessId = req.business.id;
+        if(Number(business_id)!== tokenBusinessId){
+            return res.status(403).json({
+                message:"Access denied. You cannot access another business's queue."
+            })
+        }
         const result = await pool.query(
             `SELECT id, business_id, phone, people, ticket, status
             FROM queues
