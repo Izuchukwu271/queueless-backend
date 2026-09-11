@@ -141,9 +141,11 @@ app.post("/login", async(req, res)=>{
         });
     }
 });
-app.post("/staff", async(req, res)=>{
+app.post("/staff",authenticateToken, async(req, res)=>{
     try{
-        const {business_id, staff_name}= req.body;
+        const {staff_name} = req.body;
+
+        const business_id = req.business.id;
 
         const result = await pool.query(
             `INSERT INTO staff
@@ -212,7 +214,7 @@ app.get("/queues/:business_id",authenticateToken,async(req, res)=>{
         if(Number(business_id)!== tokenBusinessId){
             return res.status(403).json({
                 message:"Access denied. You cannot access another business's queue."
-            })
+            });
         }
         const result = await pool.query(
             `SELECT id, business_id, phone, people, ticket, status
@@ -235,10 +237,17 @@ app.get("/queues/:business_id",authenticateToken,async(req, res)=>{
         });
     }
 });
-app.patch("/queues/:business_id/next", async(req, res)=>{
+app.patch("/queues/:business_id/next",authenticateToken, async(req, res)=>{
     const client = await pool.connect();
     try{
         const {business_id}=req.params;
+        const tokenBusinessId = req.business.id;
+
+        if(Number(business_id) !== tokenBusinessId){
+            return res.status(403).json({
+                message: "Access denied. You cannot serve another business's customers."
+            });
+        }
         await client.query("BEGIN");
 
         //Find a staff available
@@ -316,10 +325,11 @@ app.patch("/queues/:business_id/next", async(req, res)=>{
     }
 });
 
-app.patch("/queues/:id/complete", async(req, res)=>{
+app.patch("/queues/:id/complete",authenticateToken, async(req, res)=>{
     const client = await pool.connect();
     try{
         const {id} = req.params;
+        const tokenBusinessId = req.business.id;
 
         await client.query("BEGIN");
 
