@@ -531,7 +531,68 @@ catch(error){
 
 });
 
+app.get("/dashboard", authenticateToken, async(req, res)=> {
+    try{
+    const businessId = req.business.id;
 
+    const totalStaffResult = await pool.query(
+        `SELECT COUNT(*) AS total_staff
+        FROM staff
+        WHERE business_id = $1`,
+        [businessId]
+    );
+
+    const availableStaffResult = await pool.query(
+        `SELECT COUNT(*) AS available_staff
+        FROM staff
+        WHERE business_id = $1
+        AND available = TRUE`,
+        [businessId]
+    );
+
+    const waitingCustomersResult = await pool.query(
+        `SELECT COUNT (*) AS waiting_customers
+        FROM queues
+        WHERE business_id = $1
+        AND status = 'waiting'`,
+        [businessId]
+    );
+
+    const servingCustomersResult = await pool.query(
+        `SELECT COUNT(*) AS serving_customers
+        FROM queues
+        WHERE business_id = $1
+        AND status = 'serving'`,
+        [businessId]
+    );
+
+    const completedCustomersResult = await pool.query(
+        `SELECT COUNT(*) AS completed_customers
+        FROM queues
+        WHERE business_id = $1
+        AND status = 'completed'`,
+        [businessId]
+    );
+
+    res.status(200).json({
+        totalStaff: Number(totalStaffResult.rows[0].total_staff),
+        availableStaff: Number(availableStaffResult.rows[0].availableStaff),
+        waitingCustomers: Number(waitingCustomersResult.row[0].serving_customers),
+        servingCustomers: Number(servingCustomersResult.rows[0].serving_customers),
+        completedCustomers: Number(completedCustomersResult.rows[0].completed_customers)
+
+    });
+
+}catch(error){
+
+    console.error(error);
+
+    res.status(500).json({
+        message: "Failed to get dashboard data."
+    });
+
+}
+});
 
 
 app.listen(PORT, ()=>{
