@@ -505,6 +505,34 @@ app.get("/my-staff", authenticateToken, async(req, res)=>{
 
 });
 
+app.get("/my-queues", authenticateToken, async(req, res)=>{
+    try{
+    const businessId = req.business.id;
+
+    const result = await pool.query(
+        `SELECT id, business_id, phone, ticket, status, staff_id
+        FROM queues
+        WHERE business_id = $1
+        ORDER BY id ASC`,
+        [businessId]
+    );
+
+    res.status(200).json({
+        queues: result.rows
+    });
+}
+catch(error){
+    console.error(error);
+
+    res.status(500).json({
+        message: "Failed to get queues."
+    });
+}  
+
+});
+
+
+
 
 app.listen(PORT, ()=>{
     console.log(`Queueless server running on port ${PORT}`);
