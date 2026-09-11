@@ -332,6 +332,29 @@ app.patch("/queues/:id/complete",authenticateToken, async(req, res)=>{
         const tokenBusinessId = req.business.id;
 
         await client.query("BEGIN");
+        const ownershipResult = await client.query(
+            `SELECT business_id
+            FROM queues
+            WHERE id = $1`,
+            [id]
+        );
+
+        if(ownershipResult.rows.length === 0){
+            await client.query("ROLLBACK");
+
+            return res.status(404).json({
+                message: "Queue customer not found."
+            });
+        }
+        const queueBusinessId = ownershipResult.rows[0].business_id;
+
+        if(queueBusinessId !== tokenBusinessId){
+            await client.query("ROLLBACK");
+
+            return res.status(403).json({
+                message:"Access denied. You cannot complete another business's customer."
+            });
+        }
 
         const result = await client.query(
             `UPDATE queues
@@ -378,9 +401,31 @@ app.patch("/queues/:id/complete",authenticateToken, async(req, res)=>{
         client.release();
     }
 });
-app.patch("/queues/:id/cancel", async(req, res)=>{
+app.patch("/queues/:id/cancel", authenticateToken, async(req, res)=>{
     try{
         const { id } = req.params;
+
+        const tokenBusinessId = req.business.id;
+
+        const ownershipResult = await pool.query(
+            `SELECT business_id
+            FROM queues
+            WHERE id = $1`,
+            [id]
+        );
+
+        if(ownershipResult.rows.length === 0){
+            return res.status(404).json({
+                message: "Queue customer not found."
+            });
+        }
+        const queueBusinessId = ownershipResult.rows[0].business_id;
+
+        if(queueBusinessId !== tokenBusinessId){
+            return res.status(403).json({
+                message: "Access denied. You cannot cancel another business's customer."
+            });
+        }
 
         const result = await pool.query(
             `UPDATE  queues
@@ -408,6 +453,58 @@ app.patch("/queues/:id/cancel", async(req, res)=>{
         });
     }
 });
+app.get("/my-business", authenticateToken, async (req, res)=>{
+    try{
+
+    const businessId = req.business.id;
+    const result = await pool.query(
+        `SELECT id, business_name, phone, location
+        FROM businesses
+        WHERE id = $1`,
+        [businessId]
+    );
+    if(result.rows.length === 0){
+        return res.status(404).json({
+            message: "Business not found."
+        });
+    }
+
+    res.status(200).json({
+        business: result.rows[0]
+    });
+}catch(error){
+    console.error(error);
+
+    res.status(500).json({
+        message: "Failed to get business information."
+    });
+}
+
+});
+
+app.get("/my-staff", authenticateToken, async(req, res)=>{
+    try{
+    const businessId = req.business.id;
+
+    const result = await pool.query(
+        `SELECT id, business_id, staff_name, available
+        FROM staff
+        WHERE business_id = $1
+        ORDER BY id ASC`,
+        [businessId]
+    )
+    res.status(200).json({
+        staff: result.rows
+    });
+}catch(error){
+    console.error(error);
+    res.status(500).json({
+        message: "Failed to get staff."
+    });
+}
+
+});
+
 
 app.listen(PORT, ()=>{
     console.log(`Queueless server running on port ${PORT}`);
