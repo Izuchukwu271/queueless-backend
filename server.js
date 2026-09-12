@@ -64,6 +64,33 @@ app.get("/test-db", async(req, res)=> {
 app.post("/businesses", async(req, res)=>{
     try{
         const {business_name, phone, password, location} = req.body;
+        if(!business_name || !phone || !password || !location){
+            return res.status(400).json({
+                message: "Business name, phone, password, and location are required."
+            });
+        }
+
+        if(password.length<6){
+            return res.status(400).json({
+                message: "Password must be at least 6 characters long."
+            });
+        }
+
+        if(phone.length<8){
+            return res.status(400).json({
+                message: "phone number must be at least 8 characters long."
+            });
+        }
+
+        const existingBusiness = await pool.query(
+            `SELECT id FROM businesses WHERE phone = $1`,
+            [phone]
+        );
+        if(existingBusiness.rows.length>0){
+            return res.status(409).json({
+                message: "A business with this phone number already exists."
+            });
+        }
         const hashedPassword = await bcrypt.hash(password,10);
 
         const result = await pool.query(
