@@ -63,12 +63,24 @@ app.get("/test-db", async(req, res)=> {
 
 app.post("/businesses", async(req, res)=>{
     try{
-        const {business_name, phone, password, location} = req.body;
-        if(!business_name || !phone || !password || !location){
-            return res.status(400).json({
-                message: "Business name, phone, password, and location are required."
-            });
-        }
+       const business_name = req.body.business_name?.trim();
+      const phone = req.body.phone?.trim();
+     const password = req.body.password?.trim();
+      const location = req.body.location?.trim();
+    if (
+    !business_name ||
+    !phone ||
+    !password ||
+    !location ||
+    !business_name.trim() ||
+    !phone.trim() ||
+    !password.trim() ||
+    !location.trim()
+) {
+    return res.status(400).json({
+        message: "Business name, phone, password, and location are required."
+    });
+}
 
         if(password.length<6){
             return res.status(400).json({
