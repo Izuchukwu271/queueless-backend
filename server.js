@@ -550,6 +550,14 @@ app.get("/dashboard", authenticateToken, async(req, res)=> {
         [businessId]
     );
 
+    const busyStaffResult = await pool.query(
+        `SELECT COUNT(*) AS busy_staff
+        FROM staff
+        WHERE business_id = $1
+        AND available = FALSE`,
+        [businessId]
+    )
+
     const waitingCustomersResult = await pool.query(
         `SELECT COUNT (*) AS waiting_customers
         FROM queues
@@ -574,12 +582,23 @@ app.get("/dashboard", authenticateToken, async(req, res)=> {
         [businessId]
     );
 
+    const cancelledCustomersResult = await pool.query(
+    `SELECT COUNT(*) AS cancelled_customers
+     FROM queues
+     WHERE business_id = $1
+     AND status = 'cancelled'`,
+
+    [businessId]
+);
+
     res.status(200).json({
         totalStaff: Number(totalStaffResult.rows[0].total_staff),
         availableStaff: Number(availableStaffResult.rows[0].available_staff),
         waitingCustomers: Number(waitingCustomersResult.rows[0].waiting_customers),
         servingCustomers: Number(servingCustomersResult.rows[0].serving_customers),
-        completedCustomers: Number(completedCustomersResult.rows[0].completed_customers)
+        completedCustomers: Number(completedCustomersResult.rows[0].completed_customers),
+        busyStaff: Number(busyStaffResult.rows[0].busy_staff),
+        cancelledCustomers: Number(cancelledCustomersResult.rows[0].cancelled_customers),
 
     });
 
