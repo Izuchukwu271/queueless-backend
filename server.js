@@ -576,8 +576,8 @@ app.get("/dashboard", authenticateToken, async(req, res)=> {
 
     res.status(200).json({
         totalStaff: Number(totalStaffResult.rows[0].total_staff),
-        availableStaff: Number(availableStaffResult.rows[0].availableStaff),
-        waitingCustomers: Number(waitingCustomersResult.row[0].serving_customers),
+        availableStaff: Number(availableStaffResult.rows[0].available_staff),
+        waitingCustomers: Number(waitingCustomersResult.rows[0].waiting_customers),
         servingCustomers: Number(servingCustomersResult.rows[0].serving_customers),
         completedCustomers: Number(completedCustomersResult.rows[0].completed_customers)
 
