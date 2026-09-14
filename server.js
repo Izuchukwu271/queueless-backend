@@ -182,7 +182,13 @@ app.post("/login", async(req, res)=>{
 });
 app.post("/staff",authenticateToken, async(req, res)=>{
     try{
-        const {staff_name} = req.body;
+        const staff_name = req.body.staff_name?.trim();
+
+        if(!staff_name){
+            return res.status(400).json({
+                message: "staff name is required"
+            });
+        }
 
         const business_id = req.business.id;
 
@@ -206,7 +212,31 @@ app.post("/staff",authenticateToken, async(req, res)=>{
 });
 app.post("/queues", async (req, res) => {
     try {
-        const { business_id, phone, people } = req.body;
+        const business_id = req.body.business_id;
+        const phone = req.body.phone?.trim();
+        const people = req.body.people;
+
+        if (!business_id || !phone || people === undefined) {
+    return res.status(400).json({
+        message: "Business ID, phone, and number of people are required."
+    });
+}
+
+if (!Number.isInteger(people) || people <= 0) {
+    return res.status(400).json({
+        message: "Number of people must be a positive whole number."
+    });
+}
+if (phone.length < 8) {
+    return res.status(400).json({
+        message: "Phone number must be at least 8 characters long."
+    });
+}
+if (!Number.isInteger(business_id) || business_id <= 0) {
+    return res.status(400).json({
+        message: "Business ID must be a positive whole number."
+    });
+}
 
         // Find the highest ticket number for this business
         const result = await pool.query(
