@@ -67,6 +67,11 @@ app.post("/businesses", async(req, res)=>{
       const phone = req.body.phone?.trim();
      const password = req.body.password?.trim();
       const location = req.body.location?.trim();
+      const slug = business_name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
     if (
     !business_name ||
     !phone ||
@@ -107,10 +112,10 @@ app.post("/businesses", async(req, res)=>{
 
         const result = await pool.query(
     `INSERT INTO businesses
-    (business_name, phone, password, location)
-    VALUES ($1, $2, $3, $4)
-    RETURNING id, business_name, phone, location`,
-    [business_name, phone, hashedPassword, location]
+(business_name, phone, password, location, slug)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, business_name, phone, location, slug`,
+    [business_name, phone, hashedPassword, location, slug]
 );
 
         res.status(201).json({
@@ -210,15 +215,16 @@ app.post("/staff",authenticateToken, async(req, res)=>{
         });
     }
 });
-app.post("/queues", async (req, res) => {
+app.post("/join/:slug", async (req, res) => {
     try {
-        const business_id = req.body.business_id;
-        const phone = req.body.phone?.trim();
-        const people = req.body.people;
+        const { slug } = req.params;
+const customer_name = req.body.customer_name?.trim();
+const phone = req.body.phone?.trim();
+const people = req.body.people;
 
-        if (!business_id || !phone || people === undefined) {
+        if (!customer_name || !phone || people === undefined) {
     return res.status(400).json({
-        message: "Business ID, phone, and number of people are required."
+        message: "Customer name, phone, and number of people are required."
     });
 }
 
@@ -227,14 +233,10 @@ if (!Number.isInteger(people) || people <= 0) {
         message: "Number of people must be a positive whole number."
     });
 }
+
 if (phone.length < 8) {
     return res.status(400).json({
         message: "Phone number must be at least 8 characters long."
-    });
-}
-if (!Number.isInteger(business_id) || business_id <= 0) {
-    return res.status(400).json({
-        message: "Business ID must be a positive whole number."
     });
 }
 
@@ -680,6 +682,36 @@ app.get("/dashboard", authenticateToken, async(req, res)=> {
     });
 
 }
+});
+
+app.get("/join/:slug", async (req, res) => {
+    try {
+        const { slug } = req.params;
+
+        const result = await pool.query(
+            `SELECT id, business_name, location, slug
+             FROM businesses
+             WHERE slug = $1`,
+            [slug]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: "Business not found."
+            });
+        }
+
+        res.status(200).json({
+            business: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to find business."
+        });
+    }
 });
 
 
