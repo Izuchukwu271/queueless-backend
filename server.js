@@ -730,6 +730,65 @@ app.get("/join/:slug", async (req, res) => {
     }
 });
 
+app.get("/join/:slug/queue/:ticket", async (req, res) =>{
+    try{
+        const {slug, ticket } = req.params;
+
+        const result = await pool.query(
+            `SELECT
+            q.id,
+            b.business_name,
+            q.customer_name,
+            q.phone,
+            q.people,
+            q.ticket,
+            q.status
+            FROM queues q
+            JOIN businesses  b
+            ON q.business_id = b.id
+            WHERE b.slug = $1
+            AND q.ticket = $2
+            `,
+            [slug, ticket]
+        );
+
+        if(result.rows.length === 0){
+            return res.status(404).json({
+                message: "Queue ticket not found."
+            });
+        }
+
+        const queue = result.rows[0];
+
+        const peopleAhead = await pool.query(
+            `SELECT COUNT(*) AS count
+            FROM queues
+            WHERE business_id = (
+                SELECT business_id
+                FROM queues
+                WHERE id = $1
+                )
+                AND id < $1
+                AND status = 'waiting'`,
+                [queue.id]
+        );
+
+        res.status(200).json({
+            business: queue.business_name,
+            customer: queue.customer_name,
+            ticket: queue.ticket,
+            status: queue.status,
+            people: queue.people,
+            people_ahead : Number(peopleAhead.rows[0].count)
+        });
+    }catch(error){
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to get queue status."
+        });
+    }
+});
 
 
 
