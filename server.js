@@ -380,7 +380,7 @@ app.patch("/queues/:business_id/next",authenticateToken, async(req, res)=>{
             SET status = 'serving',
               staff_id = $1
             WHERE id = $2  
-            RETURNING id, business_id, phone, people, ticket, status, staff_id`,
+            RETURNING id, business_id, customer_name, phone, people, ticket, status, staff_id`,
             [staff.id, customer.id]
             
         );
@@ -597,7 +597,7 @@ app.get("/my-queues", authenticateToken, async(req, res)=>{
     const businessId = req.business.id;
 
     const result = await pool.query(
-        `SELECT id, business_id, phone, ticket, status, staff_id
+        `SELECT id, business_id, customer_name, phone, ticket, status, staff_id
         FROM queues
         WHERE business_id = $1
         ORDER BY id ASC`,
