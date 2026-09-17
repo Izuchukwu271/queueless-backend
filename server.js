@@ -304,7 +304,7 @@ app.get("/queues/:business_id",authenticateToken,async(req, res)=>{
             });
         }
         const result = await pool.query(
-            `SELECT id, business_id, phone, people, ticket, status
+            `SELECT id, business_id, customer_name, phone, people, ticket, status, staff_id
             FROM queues
             WHERE business_id = $1
             ORDER BY id ASC
@@ -519,7 +519,7 @@ app.patch("/queues/:id/cancel", authenticateToken, async(req, res)=>{
             SET status = 'cancelled'
             WHERE id = $1
             AND status = 'waiting'
-            RETURNING id, business_id, phone, people, ticket, status`,
+            RETURNING id, business_id, customer_name, phone, people, ticket, status`,
             [id]
         );
 
