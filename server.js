@@ -240,6 +240,22 @@ if (phone.length < 8) {
     });
 }
 
+const businessResult = await pool.query(
+    `SELECT id, business_name, location
+    FROM businesses
+    WHERE slug = $1`,
+    [slug]
+);
+
+if (businessResult.rows.length === 0) {
+    return res.status(404).json({
+        message: "Business not found."
+    });
+}
+
+const business = businessResult.rows[0];
+const business_id = business.id;
+
         // Find the highest ticket number for this business
         const result = await pool.query(
             `SELECT MAX(
@@ -258,10 +274,10 @@ if (phone.length < 8) {
         // Add customer to queue
         const newQueue = await pool.query(
             `INSERT INTO queues
-            (business_id, phone, people, ticket)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, business_id, phone, people, ticket, status`,
-            [business_id, phone, people, ticket]
+            (business_id, customer_name , phone, people, ticket)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, business_id, customer_name, phone, people, ticket, status`,
+            [business_id, customer_name, phone, people, ticket]
         );
 
         res.status(201).json({
@@ -713,6 +729,8 @@ app.get("/join/:slug", async (req, res) => {
         });
     }
 });
+
+
 
 
 app.listen(PORT, ()=>{
