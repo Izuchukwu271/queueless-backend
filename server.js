@@ -708,7 +708,7 @@ app.get("/join/:slug", async (req, res) => {
         const { slug } = req.params;
 
         const result = await pool.query(
-            `SELECT id, business_name, location, slug
+            `SELECT id, business_name, location, slug, phone
              FROM businesses
              WHERE slug = $1`,
             [slug]
