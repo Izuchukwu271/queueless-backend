@@ -327,90 +327,103 @@ app.get("/queues/:business_id",authenticateToken,async(req, res)=>{
         });
     }
 });
-app.patch("/queues/:business_id/next",authenticateToken, async(req, res)=>{
+app.patch("/queues/:business_id/next", authenticateToken, async (req, res) => {
     const client = await pool.connect();
-    try{
-        const {business_id}=req.params;
+
+    try {
+        const { business_id } = req.params;
         const tokenBusinessId = req.business.id;
 
-        if(Number(business_id) !== tokenBusinessId){
+        // Verify business ownership
+        if (Number(business_id) !== tokenBusinessId) {
             return res.status(403).json({
                 message: "Access denied. You cannot serve another business's customers."
             });
         }
+
         await client.query("BEGIN");
 
-        //Find a staff available
+        // Find an available staff member
         const staffResult = await client.query(
             `SELECT id, staff_name
-            FROM staff
-            WHERE business_id = $1
-            AND available = TRUE
-            LIMIT 1`,
+             FROM staff
+             WHERE business_id = $1
+             AND available = TRUE
+             ORDER BY id ASC
+             LIMIT 1
+             FOR UPDATE`,
             [business_id]
         );
-        if(staffResult.rows.length === 0){
-              await client.query("ROLLBACK");
+
+        if (staffResult.rows.length === 0) {
+            await client.query("ROLLBACK");
 
             return res.status(404).json({
                 message: "No staff member is currently available."
             });
         }
+
         const staff = staffResult.rows[0];
 
-        // find the next waiting customer
+        // Find the next waiting customer
         const queueResult = await client.query(
             `SELECT id
-            FROM queues
-            WHERE business_id = $1
-            AND status = 'waiting'
-            ORDER BY id ASC
-            LIMIT 1`,
+             FROM queues
+             WHERE business_id = $1
+             AND status = 'waiting'
+             ORDER BY id ASC
+             LIMIT 1
+             FOR UPDATE`,
             [business_id]
         );
-        if(queueResult.rows.length === 0){
-             await client.query("ROLLBACK");
+
+        if (queueResult.rows.length === 0) {
+            await client.query("ROLLBACK");
+
             return res.status(404).json({
-                message:"No customers are waiting."
+                message: "No customers are waiting."
             });
         }
+
         const customer = queueResult.rows[0];
 
-        // Assign staff and start serving customer
-
+        // Assign the customer to the available staff member
         const result = await client.query(
             `UPDATE queues
-            SET status = 'serving',
-              staff_id = $1
-            WHERE id = $2  
-            RETURNING id, business_id, customer_name, phone, people, ticket, status, staff_id`,
+             SET status = 'serving',
+                 staff_id = $1
+             WHERE id = $2
+             RETURNING id, business_id, customer_name, phone, people, ticket, status, staff_id`,
             [staff.id, customer.id]
-            
         );
-        // make the staff member unvailable
+
+        // Mark the staff member as busy
         await client.query(
             `UPDATE staff
-            SET available = FALSE
-            WHERE id = $1`,
+             SET available = FALSE
+             WHERE id = $1`,
             [staff.id]
         );
-        // Save both changes permanently
-         await client.query("COMMIT");
 
+        // Save changes
+        await client.query("COMMIT");
 
         res.status(200).json({
             message: "Customer is now being served",
             staff: staff,
             queue: result.rows[0]
         });
-    }catch(error){
+
+    } catch (error) {
         await client.query("ROLLBACK");
 
         console.error(error);
+
         res.status(500).json({
-            message:"Failed to serve next customer."
+            message: "Failed to serve next customer."
         });
-    }finally{
+
+    } finally {
         client.release();
     }
 });
