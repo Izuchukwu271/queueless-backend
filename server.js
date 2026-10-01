@@ -585,6 +585,126 @@ app.get("/my-business", authenticateToken, async (req, res)=>{
 
 });
 
+// =====================================
+// UPDATE BUSINESS INFORMATION
+// =====================================
+
+app.patch("/my-business", authenticateToken, async (req, res) => {
+
+    try {
+
+        const businessId = req.business.id;
+
+        const {
+            business_name,
+            phone,
+            location
+        } = req.body;
+
+
+        // ==============================
+        // VALIDATION
+        // ==============================
+
+        if (
+            !business_name ||
+            !phone ||
+            !location
+        ) {
+
+            return res.status(400).json({
+                message:
+                    "Business name, phone and location are required."
+            });
+
+        }
+
+
+        // ==============================
+        // UPDATE BUSINESS
+        // ==============================
+
+        const result = await pool.query(
+            `UPDATE businesses
+             SET
+                business_name = $1,
+                phone = $2,
+                location = $3
+             WHERE id = $4
+             RETURNING
+                id,
+                business_name,
+                phone,
+                location,
+                slug`,
+            [
+                business_name.trim(),
+                phone.trim(),
+                location.trim(),
+                businessId
+            ]
+        );
+
+
+        // ==============================
+        // BUSINESS NOT FOUND
+        // ==============================
+
+        if (result.rows.length === 0) {
+
+            return res.status(404).json({
+                message:
+                    "Business not found."
+            });
+
+        }
+
+
+        // ==============================
+        // SUCCESS
+        // ==============================
+
+        res.status(200).json({
+
+            message:
+                "Business information updated successfully.",
+
+            business:
+                result.rows[0]
+
+        });
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Business update error:",
+            error
+        );
+
+
+        // Handle duplicate phone number
+
+        if (error.code === "23505") {
+
+            return res.status(409).json({
+                message:
+                    "That phone number is already registered to another business."
+            });
+
+        }
+
+
+        res.status(500).json({
+            message:
+                "Failed to update business information."
+        });
+
+    }
+
+});
+
 app.get("/my-staff", authenticateToken, async(req, res)=>{
     try{
     const businessId = req.business.id;
