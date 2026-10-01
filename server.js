@@ -561,11 +561,11 @@ app.get("/my-business", authenticateToken, async (req, res)=>{
 
     const businessId = req.business.id;
     const result = await pool.query(
-        `SELECT id, business_name, phone, location
-        FROM businesses
-        WHERE id = $1`,
-        [businessId]
-    );
+    `SELECT id, business_name, phone, location, slug
+    FROM businesses
+    WHERE id = $1`,
+    [businessId]
+);
     if(result.rows.length === 0){
         return res.status(404).json({
             message: "Business not found."
