@@ -367,15 +367,16 @@ app.patch("/queues/:business_id/next", authenticateToken, async (req, res) => {
 
         // Find the next waiting customer
         const queueResult = await client.query(
-            `SELECT id
-             FROM queues
-             WHERE business_id = $1
-             AND status = 'waiting'
-             ORDER BY id ASC
-             LIMIT 1
-             FOR UPDATE`,
-            [business_id]
-        );
+    `SELECT *
+     FROM queues
+     WHERE business_id = $1
+     AND status = 'waiting'
+     AND created_at >= CURRENT_DATE
+     AND created_at < CURRENT_DATE + INTERVAL '1 day'
+     ORDER BY id ASC
+     LIMIT 1`,
+    [businessId]
+);
 
         if (queueResult.rows.length === 0) {
             await client.query("ROLLBACK");
@@ -918,6 +919,49 @@ app.get("/dashboard", authenticateToken, async(req, res)=> {
     });
 
 }
+});
+
+// QUEUE HISTORY
+
+app.get("/queue-history", authenticateToken, async (req, res) => {
+    try {
+
+        const businessId = req.business.id;
+
+        const result = await pool.query(
+            `SELECT
+                q.id,
+                q.business_id,
+                q.customer_name,
+                q.phone,
+                q.people,
+                q.ticket,
+                q.status,
+                q.staff_id,
+                s.staff_name,
+                q.created_at
+            FROM queues q
+            LEFT JOIN staff s
+                ON q.staff_id = s.id
+            WHERE q.business_id = $1
+            AND q.created_at < CURRENT_DATE
+            ORDER BY q.created_at DESC`,
+            [businessId]
+        );
+
+        res.status(200).json({
+            history: result.rows
+        });
+
+    } catch (error) {
+
+        console.error("Queue history error:", error);
+
+        res.status(500).json({
+            message: "Failed to get queue history."
+        });
+
+    }
 });
 
 app.get("/join/:slug", async (req, res) => {
