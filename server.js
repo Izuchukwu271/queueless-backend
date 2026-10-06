@@ -878,13 +878,15 @@ app.get("/dashboard", authenticateToken, async(req, res)=> {
         [businessId]
     );
 
-    const completedCustomersResult = await pool.query(
-        `SELECT COUNT(*) AS completed_customers
-        FROM queues
-        WHERE business_id = $1
-        AND status = 'completed'`,
-        [businessId]
-    );
+    const completedCustomersResult = await pool.query( 
+    `SELECT COUNT(*) AS completed_customers 
+     FROM queues 
+     WHERE business_id = $1 
+     AND status = 'completed'
+     AND created_at >= CURRENT_DATE
+     AND created_at < CURRENT_DATE + INTERVAL '1 day'`, 
+    [businessId] 
+);
 
     const cancelledCustomersResult = await pool.query(
     `SELECT COUNT(*) AS cancelled_customers
