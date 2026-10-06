@@ -556,6 +556,72 @@ app.patch("/queues/:id/cancel", authenticateToken, async(req, res)=>{
         });
     }
 });
+
+
+// CUSTOMER CANCEL QUEUE
+
+app.patch("/join/:slug/queue/:ticket/cancel", async (req, res) => {
+    try {
+        const { slug, ticket } = req.params;
+
+        const result = await pool.query(
+            `SELECT
+                q.id,
+                q.ticket,
+                q.status,
+                b.business_name
+             FROM queues q
+             JOIN businesses b
+                ON q.business_id = b.id
+             WHERE b.slug = $1
+             AND q.ticket = $2`,
+            [slug, ticket]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: "Queue ticket not found."
+            });
+        }
+
+        const queue = result.rows[0];
+
+        // Customer can only cancel while waiting
+        if (queue.status !== "waiting") {
+            return res.status(400).json({
+                message: "This ticket can no longer be cancelled."
+            });
+        }
+
+        const updateResult = await pool.query(
+            `UPDATE queues
+             SET status = 'cancelled'
+             WHERE id = $1
+             RETURNING
+                id,
+                ticket,
+                status`,
+            [queue.id]
+        );
+
+        res.status(200).json({
+            message: "Queue ticket cancelled successfully.",
+            queue: updateResult.rows[0]
+        });
+
+    } catch (error) {
+
+        console.error(
+            "Customer cancellation error:",
+            error
+        );
+
+        res.status(500).json({
+            message: "Failed to cancel queue ticket."
+        });
+    }
+});
+
 app.get("/my-business", authenticateToken, async (req, res)=>{
     try{
 
