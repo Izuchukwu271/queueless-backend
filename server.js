@@ -795,7 +795,6 @@ app.get("/my-staff", authenticateToken, async(req, res)=>{
 });
 
 app.get("/my-queues", authenticateToken, async(req, res) => {
-
     try {
 
         const businessId = req.business.id;
@@ -810,11 +809,14 @@ app.get("/my-queues", authenticateToken, async(req, res) => {
                 q.ticket,
                 q.status,
                 q.staff_id,
-                s.staff_name
+                s.staff_name,
+                q.created_at
             FROM queues q
             LEFT JOIN staff s
                 ON q.staff_id = s.id
             WHERE q.business_id = $1
+            AND q.created_at >= CURRENT_DATE
+            AND q.created_at < CURRENT_DATE + INTERVAL '1 day'
             ORDER BY q.id ASC`,
             [businessId]
         );
@@ -832,7 +834,6 @@ app.get("/my-queues", authenticateToken, async(req, res) => {
         });
 
     }
-
 });
 
 app.get("/dashboard", authenticateToken, async(req, res)=> {
