@@ -188,6 +188,66 @@ app.post("/login", async(req, res)=>{
         });
     }
 });
+
+
+app.post("/password-recovery/request", async (req, res) => {
+    try {
+        const phone =
+            String(req.body.phone || "").trim();
+
+        if (!phone || phone.length > 30) {
+            return res.status(400).json({
+                message: "Please provide a valid phone number."
+            });
+        }
+
+        // Look up the business without revealing
+        // whether the account exists to the requester.
+        const result = await pool.query(
+            `SELECT id
+             FROM businesses
+             WHERE phone = $1`,
+            [phone]
+        );
+
+        if (result.rows.length > 0) {
+            const businessId = result.rows[0].id;
+
+            // Avoid creating another pending request
+            // if one already exists for this business.
+            await pool.query(
+                `INSERT INTO password_recovery_requests
+                    (business_id)
+                 SELECT $1
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM password_recovery_requests
+                     WHERE business_id = $1
+                       AND status = 'pending'
+                 )`,
+                [businessId]
+            );
+        }
+
+        // Same response whether the account exists or not.
+        return res.status(200).json({
+            message:
+                "If the account is eligible, a recovery request can be reviewed by the QueueLess administrator."
+        });
+
+    } catch (error) {
+        console.error(
+            "Password recovery request error:",
+            error.message
+        );
+
+        return res.status(500).json({
+            message:
+                "Unable to process your request right now. Please try again later."
+        });
+    }
+});
+
 app.post("/staff",authenticateToken, async(req, res)=>{
     try{
         const staff_name = req.body.staff_name?.trim();
