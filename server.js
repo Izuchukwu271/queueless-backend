@@ -11,6 +11,40 @@ app.use(cors());
 
 app.use(express.json());
 
+// PROTECT ADMIN ROUTES
+function requireAdmin(req, res, next) {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({
+            message: "Authentication required."
+        });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    try {
+        const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET
+        );
+
+        if (decoded.role !== "admin") {
+            return res.status(403).json({
+                message: "Admin access only."
+            });
+        }
+
+        req.admin = decoded;
+        next();
+
+    } catch (error) {
+        return res.status(401).json({
+            message: "Invalid or expired token."
+        });
+    }
+}
+
 const PORT = 3000;
 
 // connect to postgresql
@@ -1139,6 +1173,74 @@ app.get("/join/:slug/queue/:ticket", async (req, res) => {
         });
 
     }
+});
+
+// ADMIN LOGIN
+app.post("/admin/login", async (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({
+                message: "Username and password are required."
+            });
+        }
+
+        if (
+            !process.env.ADMIN_USERNAME ||
+            !process.env.ADMIN_PASSWORD_HASH ||
+            !process.env.JWT_SECRET
+        ) {
+            console.error("Admin environment variables are missing.");
+
+            return res.status(500).json({
+                message: "Admin login is not configured."
+            });
+        }
+
+        const usernameMatches =
+            username === process.env.ADMIN_USERNAME;
+
+        const passwordMatches = await bcrypt.compare(
+            password,
+            process.env.ADMIN_PASSWORD_HASH
+        );
+
+        if (!usernameMatches || !passwordMatches) {
+            return res.status(401).json({
+                message: "Invalid username or password."
+            });
+        }
+
+        const token = jwt.sign(
+            {
+                role: "admin",
+                username: process.env.ADMIN_USERNAME
+            },
+            process.env.JWT_SECRET,
+            { expiresIn: "1h" }
+        );
+
+        return res.status(200).json({
+            message: "Admin login successful.",
+            token
+        });
+
+    } catch (error) {
+        console.error("Admin login error:", error);
+
+        return res.status(500).json({
+            message: "An unexpected error occurred."
+        });
+    }
+});
+
+// TEST PROTECTED ADMIN ACCESS
+app.get("/admin/dashboard", requireAdmin, (req, res) => {
+    res.status(200).json({
+        message: "Welcome to the QueueLess Admin Dashboard!",
+        admin: req.admin.username
+    });
 });
 
 
