@@ -53,7 +53,10 @@ const pool = new Pool({
     host: process.env.DB_HOST,
     database: process.env.DB_NAME,
     password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT
+    port: Number(process.env.DB_PORT),
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
 
 function authenticateToken(req, res, next){
@@ -1241,6 +1244,112 @@ app.get("/admin/dashboard", requireAdmin, (req, res) => {
         message: "Welcome to the QueueLess Admin Dashboard!",
         admin: req.admin.username
     });
+});
+
+// GET PENDING PASSWORD-RECOVERY REQUESTS
+app.get("/admin/recovery-requests", requireAdmin, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                pr.id AS request_id,
+                pr.status,
+                pr.requested_at,
+                b.id AS business_id,
+                b.business_name AS business_name,
+                b.phone AS business_phone
+            FROM public.password_recovery_requests pr
+            JOIN public.businesses b
+                ON b.id = pr.business_id
+            WHERE pr.status = 'pending'
+            ORDER BY pr.requested_at ASC
+        `);
+
+        res.status(200).json({
+            message: "Pending recovery requests retrieved successfully.",
+            count: result.rows.length,
+            requests: result.rows
+        });
+
+    } catch (error) {
+        console.error("Error fetching recovery requests:", error);
+
+        res.status(500).json({
+            message: "Unable to retrieve recovery requests."
+        });
+    }
+});
+
+
+/* REVIEW A PASSWORD-RECOVERY REQUEST */
+app.patch("/admin/recovery-requests/:id", requireAdmin, async (req, res) => {
+    try {
+        const requestId = Number(req.params.id);
+        const { status } = req.body || {};
+
+        // Validate request ID
+        if (!Number.isSafeInteger(requestId) || requestId <= 0) {
+            return res.status(400).json({
+                message: "Invalid recovery request ID."
+            });
+        }
+
+        // Only allow the two review actions
+        if (!["approved", "rejected"].includes(status)) {
+            return res.status(400).json({
+                message: "Status must be approved or rejected."
+            });
+        }
+
+        const result = await pool.query(
+            `UPDATE public.password_recovery_requests
+             SET status = $1,
+                 reviewed_at = NOW(),
+                 reviewed_by = $2
+             WHERE id = $3
+               AND status = 'pending'
+             RETURNING id, business_id, status, requested_at,
+                       reviewed_at, reviewed_by`,
+            [status, req.admin.username, requestId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                message: "Pending recovery request not found."
+            });
+        }
+
+        return res.status(200).json({
+            message: `Recovery request ${status} successfully.`,
+            request: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error("Error reviewing recovery request:", error);
+
+        return res.status(500).json({
+            message: "Unable to review recovery request."
+        });
+    }
+});
+
+
+app.get("/debug/database", async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                current_database() AS database_name,
+                current_user AS database_user,
+                inet_server_addr() AS server_address,
+                current_schema() AS schema_name
+        `);
+
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error("Database diagnostic failed:", error.message);
+        res.status(500).json({
+            message: "Database diagnostic failed."
+        });
+    }
 });
 
 
