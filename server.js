@@ -1333,24 +1333,35 @@ app.patch("/admin/recovery-requests/:id", requireAdmin, async (req, res) => {
 });
 
 
-app.get("/debug/database", async (req, res) => {
+app.get("/admin/recovery-stats", requireAdmin, async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT
-                current_database() AS database_name,
-                current_user AS database_user,
-                inet_server_addr() AS server_address,
-                current_schema() AS schema_name
+                COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+                COUNT(*) FILTER (WHERE status = 'approved') AS approved,
+                COUNT(*) FILTER (WHERE status = 'rejected') AS rejected,
+                COUNT(*) AS total
+            FROM public.password_recovery_requests
         `);
 
-        res.json(result.rows[0]);
+        const stats = result.rows[0];
+
+        res.json({
+            pending: Number(stats.pending),
+            approved: Number(stats.approved),
+            rejected: Number(stats.rejected),
+            total: Number(stats.total)
+        });
     } catch (error) {
-        console.error("Database diagnostic failed:", error.message);
+        console.error("Admin recovery stats error:", error.message);
         res.status(500).json({
-            message: "Database diagnostic failed."
+            message: "Unable to load recovery statistics."
         });
     }
 });
+
+
+
 
 
 
