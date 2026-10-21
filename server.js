@@ -3,7 +3,33 @@ const {Pool} = require("pg");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
+const crypto = require("crypto");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
+
+
+// ========================================
+// QUEUELESS EMAIL CONFIGURATION
+// ========================================
+
+const emailTransporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD
+    }
+});
+
+emailTransporter.verify()
+    .then(() => {
+        console.log("QueueLess Gmail SMTP connection successful!");
+    })
+    .catch((error) => {
+        console.error(
+            "QueueLess Gmail SMTP connection failed:",
+            error.message
+        );
+    });
 
 const app = express();
 
@@ -101,75 +127,225 @@ app.get("/test-db", async(req, res)=> {
     }
 })
 
-app.post("/businesses", async(req, res)=>{
-    try{
-       const business_name = req.body.business_name?.trim();
-      const phone = req.body.phone?.trim();
-     const password = req.body.password?.trim();
-      const location = req.body.location?.trim();
-      const slug = business_name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-    if (
-    !business_name ||
-    !phone ||
-    !password ||
-    !location ||
-    !business_name.trim() ||
-    !phone.trim() ||
-    !password.trim() ||
-    !location.trim()
-) {
-    return res.status(400).json({
-        message: "Business name, phone, password, and location are required."
-    });
-}
 
-        if(password.length<6){
+app.post("/businesses", async (req, res) => {
+    let client;
+    let transactionStarted = false;
+
+    try {
+        // 1. Read and normalize the submitted fields
+        const business_name =
+            String(req.body.business_name || "").trim();
+
+        const phone =
+            String(req.body.phone || "").trim();
+
+        const email =
+            String(req.body.email || "").trim().toLowerCase();
+
+        const location =
+            String(req.body.location || "").trim();
+
+        const password =
+            String(req.body.password || "");
+
+        // 2. Validate required fields
+        if (!business_name || !phone || !email || !location || !password) {
+            return res.status(400).json({
+                message: "Business name, phone, email, password, and location are required."
+            });
+        }
+
+        if (business_name.length > 150) {
+            return res.status(400).json({
+                message: "Business name is too long."
+            });
+        }
+
+        if (phone.length < 8 || phone.length > 30) {
+            return res.status(400).json({
+                message: "Phone number must be between 8 and 30 characters."
+            });
+        }
+
+        if (email.length > 254 ||
+            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({
+                message: "Please enter a valid email address."
+            });
+        }
+
+        if (password.length < 6) {
             return res.status(400).json({
                 message: "Password must be at least 6 characters long."
             });
         }
 
-        if(phone.length<8){
-            return res.status(400).json({
-                message: "phone number must be at least 8 characters long."
-            });
-        }
+        // 3. Generate a URL-friendly business slug
+        const slug = business_name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
 
-        const existingBusiness = await pool.query(
-            `SELECT id FROM businesses WHERE phone = $1`,
-            [phone]
+        // 4. Hash the password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // 5. Generate a secure email-verification token
+        const verificationToken = crypto
+            .randomBytes(32)
+            .toString("hex");
+
+        const tokenHash = crypto
+            .createHash("sha256")
+            .update(verificationToken)
+            .digest("hex");
+
+        const expiresAt = new Date(
+            Date.now() + 30 * 60 * 1000
         );
-        if(existingBusiness.rows.length>0){
+
+        // Configure FRONTEND_URL in .env when ready.
+        // This fallback is for local Live Server testing.
+        const frontendUrl = (
+            process.env.FRONTEND_URL ||
+            "http://127.0.0.1:5500"
+        ).replace(/\/+$/, "");
+
+        const verificationUrl =
+            `${frontendUrl}/verify-email.html?token=${verificationToken}`;
+
+        // 6. Create the business and token atomically
+        client = await pool.connect();
+
+        await client.query("BEGIN");
+        transactionStarted = true;
+
+        const existingBusiness = await client.query(
+            `SELECT id
+             FROM public.businesses
+             WHERE phone = $1
+                OR LOWER(email) = LOWER($2)
+             LIMIT 1`,
+            [phone, email]
+        );
+
+        if (existingBusiness.rows.length > 0) {
+            await client.query("ROLLBACK");
+            transactionStarted = false;
+
             return res.status(409).json({
-                message: "A business with this phone number already exists."
+                message: "A business with this phone number or email already exists."
             });
         }
-        const hashedPassword = await bcrypt.hash(password,10);
 
-        const result = await pool.query(
-    `INSERT INTO businesses
-(business_name, phone, password, location, slug)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, business_name, phone, location, slug`,
-    [business_name, phone, hashedPassword, location, slug]
-);
+        const businessResult = await client.query(
+            `INSERT INTO public.businesses
+                (business_name, phone, email, email_verified,
+                 password, location, slug)
+             VALUES ($1, $2, $3, FALSE, $4, $5, $6)
+             RETURNING id, business_name, phone, email,
+                       email_verified, location, slug`,
+            [
+                business_name,
+                phone,
+                email,
+                hashedPassword,
+                location,
+                slug
+            ]
+        );
 
-        res.status(201).json({
-            message: "Business registered successfully",
-            business: result.rows[0]
+        const business = businessResult.rows[0];
+
+        await client.query(
+            `INSERT INTO public.email_verification_tokens
+                (business_id, token_hash, expires_at)
+             VALUES ($1, $2, $3)`,
+            [business.id, tokenHash, expiresAt]
+        );
+
+        // 7. Send the verification email
+        await emailTransporter.sendMail({
+            from: `"QueueLess" <${process.env.GMAIL_USER}>`,
+            to: email,
+            subject: "Verify your QueueLess business email",
+            text:
+                `Hello ${business_name},\n\n` +
+                `Thank you for registering with QueueLess.\n\n` +
+                `Verify your email using this link:\n${verificationUrl}\n\n` +
+                `This link expires in 30 minutes and can only be used once.\n\n` +
+                `If you did not create this account, you can ignore this email.`,
+            html: `
+                <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px;color:#1f2937">
+                    <h2>Welcome to QueueLess</h2>
+                    <p>Hello ${business_name.replace(/[&<>"']/g, char => ({
+                        "&": "&amp;",
+                        "<": "&lt;",
+                        ">": "&gt;",
+                        '"': "&quot;",
+                        "'": "&#39;"
+                    }[char]))},</p>
+                    <p>Thanks for registering your business. Verify your email address to continue.</p>
+                    <p style="margin:28px 0">
+                        <a href="${verificationUrl}"
+                           style="background:#2563eb;color:#ffffff;padding:12px 20px;text-decoration:none;border-radius:6px">
+                            Verify email address
+                        </a>
+                    </p>
+                    <p>This link expires in 30 minutes and can only be used once.</p>
+                    <p>If you did not create this account, you can ignore this email.</p>
+                </div>
+            `
         });
+
+        await client.query("COMMIT");
+        transactionStarted = false;
+
+        // Do not return the verification token to the browser.
+        return res.status(201).json({
+            message: "Business registered. Please check your email and verify your address before signing in.",
+            business: {
+                id: business.id,
+                business_name: business.business_name,
+                phone: business.phone,
+                email: business.email,
+                email_verified: business.email_verified,
+                location: business.location,
+                slug: business.slug
+            }
+        });
+
+    } catch (error) {
+        if (client && transactionStarted) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error(
+                    "Registration rollback failed:",
+                    rollbackError.message
+                );
+            }
+        }
+
+        if (error.code === "23505") {
+            return res.status(409).json({
+                message: "This phone number, email, or business identifier is already registered."
+            });
+        }
+
+        console.error("Business registration error:", error.message);
+
+        return res.status(500).json({
+            message: "Unable to complete registration. Please try again later."
+        });
+
+    } finally {
+        if (client) {
+            client.release();
+        }
     }
-      catch(error){
-        console.error(error);
-        res.status(500).json({
-            message: "Failed to register business."
-        });
-      }
 });
+
 
 app.post("/login", async(req, res)=>{
     try{
@@ -1362,6 +1538,91 @@ app.get("/admin/recovery-stats", requireAdmin, async (req, res) => {
 
 
 
+app.post("/verify-email", async (req, res) => {
+    const token = String(req.body.token || "");
+
+    if (!/^[a-f0-9]{64}$/i.test(token)) {
+        return res.status(400).json({
+            message: "Invalid or expired verification link."
+        });
+    }
+
+    const tokenHash = crypto
+        .createHash("sha256")
+        .update(token)
+        .digest("hex");
+
+    let client;
+
+    try {
+        client = await pool.connect();
+        await client.query("BEGIN");
+
+        // Lock the token row so simultaneous requests cannot reuse it.
+        const tokenResult = await client.query(
+            `SELECT id, business_id
+             FROM public.email_verification_tokens
+             WHERE token_hash = $1
+               AND expires_at > NOW()
+               AND used_at IS NULL
+             FOR UPDATE`,
+            [tokenHash]
+        );
+
+        if (tokenResult.rows.length === 0) {
+            await client.query("ROLLBACK");
+
+            return res.status(400).json({
+                message: "This verification link is invalid, expired, or already used."
+            });
+        }
+
+        const verification = tokenResult.rows[0];
+
+        await client.query(
+            `UPDATE public.businesses
+             SET email_verified = TRUE
+             WHERE id = $1`,
+            [verification.business_id]
+        );
+
+        await client.query(
+            `UPDATE public.email_verification_tokens
+             SET used_at = NOW()
+             WHERE id = $1`,
+            [verification.id]
+        );
+
+        await client.query("COMMIT");
+
+        return res.status(200).json({
+            message: "Your email has been verified. You can now sign in."
+        });
+
+    } catch (error) {
+        if (client) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error(
+                    "Verification rollback error:",
+                    rollbackError.message
+                );
+            }
+        }
+
+        console.error("Email verification error:", error.message);
+
+        return res.status(500).json({
+            message: "Unable to verify your email right now. Please try again."
+        });
+
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+});
 
 
 
