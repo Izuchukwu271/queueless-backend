@@ -265,38 +265,61 @@ app.post("/businesses", async (req, res) => {
         );
 
         // 7. Send the verification email
-        await emailTransporter.sendMail({
-            from: `"QueueLess" <${process.env.GMAIL_USER}>`,
-            to: email,
-            subject: "Verify your QueueLess business email",
-            text:
-                `Hello ${business_name},\n\n` +
-                `Thank you for registering with QueueLess.\n\n` +
-                `Verify your email using this link:\n${verificationUrl}\n\n` +
-                `This link expires in 30 minutes and can only be used once.\n\n` +
-                `If you did not create this account, you can ignore this email.`,
-            html: `
-                <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px;color:#1f2937">
-                    <h2>Welcome to QueueLess</h2>
-                    <p>Hello ${business_name.replace(/[&<>"']/g, char => ({
-                        "&": "&amp;",
-                        "<": "&lt;",
-                        ">": "&gt;",
-                        '"': "&quot;",
-                        "'": "&#39;"
-                    }[char]))},</p>
-                    <p>Thanks for registering your business. Verify your email address to continue.</p>
-                    <p style="margin:28px 0">
-                        <a href="${verificationUrl}"
-                           style="background:#2563eb;color:#ffffff;padding:12px 20px;text-decoration:none;border-radius:6px">
-                            Verify email address
-                        </a>
-                    </p>
-                    <p>This link expires in 30 minutes and can only be used once.</p>
-                    <p>If you did not create this account, you can ignore this email.</p>
-                </div>
-            `
-        });
+        
+try {
+    const mailResult = await emailTransporter.sendMail({
+        from: `"QueueLess" <${process.env.GMAIL_USER}>`,
+        to: email,
+        subject: "Verify your QueueLess business email",
+
+        text:
+            `Hello ${business_name},\n\n` +
+            `Thank you for registering with QueueLess.\n\n` +
+            `Verify your email using this link:\n${verificationUrl}\n\n` +
+            `This link expires in 30 minutes and can only be used once.\n\n` +
+            `If you did not create this account, you can ignore this email.`,
+
+        html: `
+            <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px;color:#1f2937">
+                <h2>Welcome to QueueLess</h2>
+                <p>Hello ${business_name.replace(/[&<>"']/g, char => ({
+                    "&": "&amp;",
+                    "<": "&lt;",
+                    ">": "&gt;",
+                    '"': "&quot;",
+                    "'": "&#39;"
+                }[char]))},</p>
+                <p>Thanks for registering your business. Verify your email address to continue.</p>
+                <p style="margin:28px 0">
+                    <a href="${verificationUrl}"
+                       style="background:#2563eb;color:#ffffff;padding:12px 20px;text-decoration:none;border-radius:6px">
+                        Verify email address
+                    </a>
+                </p>
+                <p>This link expires in 30 minutes and can only be used once.</p>
+                <p>If you did not create this account, you can ignore this email.</p>
+            </div>
+        `
+    });
+
+    console.log("========== QUEUELESS EMAIL RESULT ==========");
+    console.log("Recipient:", email);
+    console.log("Accepted recipients:", mailResult.accepted);
+    console.log("Rejected recipients:", mailResult.rejected);
+    console.log("Message ID:", mailResult.messageId);
+    console.log("Response from mail server:", mailResult.response);
+    console.log("============================================");
+
+} catch (emailError) {
+    console.error("========== QUEUELESS EMAIL FAILED ==========");
+    console.error("Recipient:", email);
+    console.error("Error code:", emailError.code || "Not provided");
+    console.error("Error message:", emailError.message);
+    console.error("============================================");
+
+    throw emailError;
+}
+
 
         await client.query("COMMIT");
         transactionStarted = false;
@@ -1623,6 +1646,111 @@ app.post("/verify-email", async (req, res) => {
         }
     }
 });
+
+
+app.post("/resend-verification", async (req, res) => {
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({
+            message: "Please enter a valid email address."
+        });
+    }
+
+    let client;
+
+    try {
+        client = await pool.connect();
+
+        // Find the business associated with this email.
+        const result = await client.query(
+            `SELECT id, email, email_verified
+             FROM public.businesses
+             WHERE LOWER(email) = $1`,
+            [email]
+        );
+
+        // Use a generic response so the endpoint doesn't reveal
+        // whether an email is registered.
+        const genericMessage =
+            "If this email belongs to an unverified account, a new verification email will be sent.";
+
+        if (
+            result.rows.length === 0 ||
+            result.rows[0].email_verified === true
+        ) {
+            return res.status(200).json({ message: genericMessage });
+        }
+
+        const business = result.rows[0];
+
+        // Invalidate previous unused verification links.
+        await client.query(
+            `UPDATE public.email_verification_tokens
+             SET used_at = NOW()
+             WHERE business_id = $1
+               AND used_at IS NULL`,
+            [business.id]
+        );
+
+        // Generate a new secure verification token.
+        const token = crypto.randomBytes(32).toString("hex");
+
+        const tokenHash = crypto
+            .createHash("sha256")
+            .update(token)
+            .digest("hex");
+
+        // Make the new link valid for 30 minutes.
+        await client.query(
+            `INSERT INTO public.email_verification_tokens
+                (business_id, token_hash, expires_at)
+             VALUES ($1, $2, NOW() + INTERVAL '30 minutes')`,
+            [business.id, tokenHash]
+        );
+
+        const verificationUrl =
+            `${process.env.FRONTEND_URL}/verify-email.html?token=${token}`;
+
+        await emailTransporter.sendMail({
+            from: `"QueueLess" <${process.env.GMAIL_USER}>`,
+            to: business.email,
+            subject: "Your new QueueLess verification link",
+            text:
+                `Hello,\n\n` +
+                `Use this link to verify your QueueLess business email:\n` +
+                `${verificationUrl}\n\n` +
+                `This link expires in 30 minutes. If you didn't request it, ignore this email.`,
+            html: `
+                <h2>Verify your QueueLess email</h2>
+                <p>You requested a new verification link for your QueueLess account.</p>
+                <p>
+                    <a href="${verificationUrl}"
+                       style="display:inline-block;padding:12px 20px;background:#2563eb;color:white;text-decoration:none;border-radius:6px;">
+                        Verify Email
+                    </a>
+                </p>
+                <p>This link expires in 30 minutes.</p>
+                <p>If you didn't request this email, you can ignore it.</p>
+            `
+        });
+
+        console.log("QueueLess verification email resent to:", business.email);
+
+        return res.status(200).json({ message: genericMessage });
+
+    } catch (error) {
+        console.error("Resend verification error:", error.message);
+
+        return res.status(500).json({
+            message: "Unable to send the verification email right now. Please try again later."
+        });
+
+    } finally {
+        if (client) client.release();
+    }
+});
+
 
 
 
