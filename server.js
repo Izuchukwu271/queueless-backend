@@ -1480,54 +1480,234 @@ app.get("/admin/recovery-requests", requireAdmin, async (req, res) => {
 
 
 /* REVIEW A PASSWORD-RECOVERY REQUEST */
+
 app.patch("/admin/recovery-requests/:id", requireAdmin, async (req, res) => {
+    const client = await pool.connect();
+    let transactionStarted = false;
+
     try {
         const requestId = Number(req.params.id);
         const { status } = req.body || {};
 
-        // Validate request ID
         if (!Number.isSafeInteger(requestId) || requestId <= 0) {
             return res.status(400).json({
                 message: "Invalid recovery request ID."
             });
         }
 
-        // Only allow the two review actions
         if (!["approved", "rejected"].includes(status)) {
             return res.status(400).json({
                 message: "Status must be approved or rejected."
             });
         }
 
-        const result = await pool.query(
-            `UPDATE public.password_recovery_requests
-             SET status = $1,
-                 reviewed_at = NOW(),
-                 reviewed_by = $2
-             WHERE id = $3
-               AND status = 'pending'
-             RETURNING id, business_id, status, requested_at,
-                       reviewed_at, reviewed_by`,
-            [status, req.admin.username, requestId]
+        await client.query("BEGIN");
+        transactionStarted = true;
+
+        // Lock the pending request so it cannot be reviewed twice
+        // concurrently.
+        const requestResult = await client.query(
+            `SELECT id, business_id
+             FROM public.password_recovery_requests
+             WHERE id = $1 AND status = 'pending'
+             FOR UPDATE`,
+            [requestId]
         );
 
-        if (result.rows.length === 0) {
+        if (requestResult.rows.length === 0) {
+            await client.query("ROLLBACK");
+            transactionStarted = false;
+
             return res.status(404).json({
                 message: "Pending recovery request not found."
             });
         }
 
+        const recoveryRequest = requestResult.rows[0];
+
+        // Rejection requires no reset email or token.
+        if (status === "rejected") {
+            const rejectedResult = await client.query(
+                `UPDATE public.password_recovery_requests
+                 SET status = 'rejected',
+                     reviewed_at = NOW(),
+                     reviewed_by = $1
+                 WHERE id = $2
+                 RETURNING id, business_id, status, requested_at,
+                           reviewed_at, reviewed_by`,
+                [req.admin.username, requestId]
+            );
+
+            await client.query("COMMIT");
+            transactionStarted = false;
+
+            return res.status(200).json({
+                message: "Recovery request rejected successfully.",
+                request: rejectedResult.rows[0]
+            });
+        }
+
+        // Only send reset links to a verified registered email.
+        const businessResult = await client.query(
+            `SELECT id, business_name, email, email_verified
+             FROM public.businesses
+             WHERE id = $1
+             FOR UPDATE`,
+            [recoveryRequest.business_id]
+        );
+
+        if (
+            businessResult.rows.length === 0 ||
+            !businessResult.rows[0].email ||
+            businessResult.rows[0].email_verified !== true
+        ) {
+            await client.query("ROLLBACK");
+            transactionStarted = false;
+
+            return res.status(409).json({
+                message:
+                    "This business has no verified email address. The recovery request remains pending."
+            });
+        }
+
+        const business = businessResult.rows[0];
+
+        // Generate a cryptographically secure token.
+        const resetToken = crypto.randomBytes(32).toString("hex");
+
+        // Store only the SHA-256 hash, never the raw token.
+        const tokenHash = crypto
+            .createHash("sha256")
+            .update(resetToken)
+            .digest("hex");
+
+        // Invalidate any older, unused reset tokens for this business.
+        await client.query(
+            `UPDATE public.password_reset_tokens
+             SET used_at = NOW()
+             WHERE business_id = $1
+               AND used_at IS NULL`,
+            [business.id]
+        );
+
+        // Tokens expire after 30 minutes.
+        await client.query(
+            `INSERT INTO public.password_reset_tokens
+                (business_id, token_hash, expires_at)
+             VALUES ($1, $2, NOW() + INTERVAL '30 minutes')`,
+            [business.id, tokenHash]
+        );
+
+        // FRONTEND_URL should be the base frontend URL, for example:
+        // http://127.0.0.1:5500/frontend
+        // or your deployed frontend URL.
+        const frontendUrl = process.env.FRONTEND_URL;
+
+        if (!frontendUrl) {
+            throw new Error("FRONTEND_URL is not configured.");
+        }
+
+        const resetUrl =
+            `${frontendUrl.replace(/\/+$/, "")}/reset_password.html` +
+            `?token=${encodeURIComponent(resetToken)}`;
+
+        // Send before committing. If sending fails, the transaction
+        // will roll back and the request will remain pending.
+        const mailResult = await emailTransporter.sendMail({
+            from: `"QueueLess" <${process.env.GMAIL_USER}>`,
+            to: business.email,
+            subject: "Reset your QueueLess password",
+
+            text:
+                `Hello ${business.business_name},\n\n` +
+                `An administrator has approved your password recovery request.\n\n` +
+                `Use the link below to choose a new password:\n${resetUrl}\n\n` +
+                `This link expires in 30 minutes and can only be used once.\n\n` +
+                `If you did not request a password reset, please contact QueueLess support.`,
+
+            html: `
+                <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:24px;color:#1f2937">
+                    <h2>Reset your QueueLess password</h2>
+                    <p>Hello ${String(business.business_name).replace(/[&<>"']/g, char => ({
+                        "&": "&amp;",
+                        "<": "&lt;",
+                        ">": "&gt;",
+                        '"': "&quot;",
+                        "'": "&#39;"
+                    }[char]))},</p>
+                    <p>Your password recovery request has been approved.</p>
+                    <p style="margin:28px 0">
+                        <a href="${resetUrl}"
+                           style="background:#2563eb;color:#ffffff;padding:12px 20px;text-decoration:none;border-radius:6px">
+                            Reset password
+                        </a>
+                    </p>
+                    <p>This link expires in 30 minutes and can only be used once.</p>
+                    <p>If you did not request a password reset, please contact QueueLess support.</p>
+                </div>
+            `
+        });
+
+        // Nodemailer can resolve even when a recipient is rejected.
+        // Do not approve unless the intended recipient was accepted.
+        const acceptedRecipients = (mailResult.accepted || [])
+            .map(address => String(address).toLowerCase());
+
+        if (!acceptedRecipients.includes(String(business.email).toLowerCase())) {
+            throw new Error("The reset email recipient was not accepted.");
+        }
+
+        const approvedResult = await client.query(
+            `UPDATE public.password_recovery_requests
+             SET status = 'approved',
+                 reviewed_at = NOW(),
+                 reviewed_by = $1
+             WHERE id = $2
+               AND status = 'pending'
+             RETURNING id, business_id, status, requested_at,
+                       reviewed_at, reviewed_by`,
+            [req.admin.username, requestId]
+        );
+
+        if (approvedResult.rows.length === 0) {
+            throw new Error("Recovery request could not be approved.");
+        }
+
+        await client.query("COMMIT");
+        transactionStarted = false;
+
+        console.log(
+            "Password-reset email accepted by mail server for business:",
+            business.id
+        );
+
         return res.status(200).json({
-            message: `Recovery request ${status} successfully.`,
-            request: result.rows[0]
+            message:
+                "Recovery request approved. A password-reset email has been accepted for delivery.",
+            request: approvedResult.rows[0]
         });
 
     } catch (error) {
-        console.error("Error reviewing recovery request:", error);
+        if (transactionStarted) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error(
+                    "Recovery transaction rollback failed:",
+                    rollbackError.message
+                );
+            }
+        }
+
+        console.error("Error reviewing recovery request:", error.message);
 
         return res.status(500).json({
-            message: "Unable to review recovery request."
+            message:
+                "Unable to complete the recovery review. Please check the server logs before retrying."
         });
+
+    } finally {
+        client.release();
     }
 });
 
@@ -1558,6 +1738,134 @@ app.get("/admin/recovery-stats", requireAdmin, async (req, res) => {
         });
     }
 });
+
+
+
+app.post("/password-reset/complete", async (req, res) => {
+    const { token, newPassword, confirmPassword } = req.body || {};
+
+    if (
+        typeof token !== "string" ||
+        token.length !== 64 ||
+        !/^[a-f0-9]{64}$/i.test(token)
+    ) {
+        return res.status(400).json({
+            message: "Invalid or expired password-reset link."
+        });
+    }
+
+    if (
+        typeof newPassword !== "string" ||
+        newPassword.length < 12 ||
+        newPassword.length > 72
+    ) {
+        return res.status(400).json({
+            message: "Your password must contain between 12 and 72 characters."
+        });
+    }
+
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+            message: "The passwords do not match."
+        });
+    }
+
+    const client = await pool.connect();
+    let transactionStarted = false;
+
+    try {
+        const tokenHash = crypto
+            .createHash("sha256")
+            .update(token)
+            .digest("hex");
+
+        await client.query("BEGIN");
+        transactionStarted = true;
+
+        // Lock the token so two simultaneous submissions cannot reuse it.
+        const tokenResult = await client.query(
+            `SELECT id, business_id
+             FROM public.password_reset_tokens
+             WHERE token_hash = $1
+               AND used_at IS NULL
+               AND expires_at > NOW()
+             FOR UPDATE`,
+            [tokenHash]
+        );
+
+        if (tokenResult.rows.length === 0) {
+            await client.query("ROLLBACK");
+            transactionStarted = false;
+
+            return res.status(400).json({
+                message: "Invalid or expired password-reset link."
+            });
+        }
+
+        const resetRecord = tokenResult.rows[0];
+
+        // Confirm the business still exists.
+        const businessResult = await client.query(
+            `SELECT id
+             FROM public.businesses
+             WHERE id = $1
+             FOR UPDATE`,
+            [resetRecord.business_id]
+        );
+
+        if (businessResult.rows.length === 0) {
+            await client.query("ROLLBACK");
+            transactionStarted = false;
+
+            return res.status(400).json({
+                message: "Invalid or expired password-reset link."
+            });
+        }
+
+        const passwordHash = await bcrypt.hash(newPassword, 12);
+
+        await client.query(
+            `UPDATE public.businesses
+             SET password = $1
+             WHERE id = $2`,
+            [passwordHash, resetRecord.business_id]
+        );
+
+        await client.query(
+            `UPDATE public.password_reset_tokens
+             SET used_at = NOW()
+             WHERE business_id = $1
+               AND used_at IS NULL`,
+            [resetRecord.business_id]
+        );
+
+        await client.query("COMMIT");
+        transactionStarted = false;
+
+        return res.status(200).json({
+            message: "Your password has been reset successfully. You can now sign in."
+        });
+
+    } catch (error) {
+        if (transactionStarted) {
+            try {
+                await client.query("ROLLBACK");
+            } catch (rollbackError) {
+                console.error("Password-reset rollback failed:", rollbackError.message);
+            }
+        }
+
+        console.error("Password-reset completion error:", error.message);
+
+        return res.status(500).json({
+            message: "Unable to reset your password right now. Please try again."
+        });
+
+    } finally {
+        client.release();
+    }
+});
+
 
 
 
