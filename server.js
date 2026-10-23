@@ -370,32 +370,53 @@ try {
 });
 
 
-app.post("/login", async(req, res)=>{
-    try{
+
+app.post("/login", async (req, res) => {
+    try {
         const { phone, password } = req.body;
 
-        const result = await pool.query(
-            `SELECT id, business_name, phone, password
-            FROM businesses
-            WHERE phone =$1`,
-            [phone]
-        );
-        if(result.rows.length === 0){
-            return res.status(404).json({
-                message:"business not found."
+        if (!phone || !password) {
+            return res.status(400).json({
+                message: "Phone number and password are required."
             });
         }
+
+        const result = await pool.query(
+            `SELECT id, business_name, phone, password,
+                    email, email_verified
+             FROM businesses
+             WHERE phone = $1`,
+            [phone]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({
+                message: "Invalid phone number or password."
+            });
+        }
+
         const business = result.rows[0];
+
         const passwordMatch = await bcrypt.compare(
             password,
             business.password
         );
 
-        if(!passwordMatch){
+        if (!passwordMatch) {
             return res.status(401).json({
-                message: "Incorrect password."
+                message: "Invalid phone number or password."
             });
         }
+
+        // SECURITY CHECK: Reject unverified business accounts.
+        if (business.email_verified !== true) {
+            return res.status(403).json({
+                code: "EMAIL_NOT_VERIFIED",
+                message: "Please verify your email address before logging in."
+            });
+        }
+
+        // Issue a JWT only after successful verification.
         const token = jwt.sign(
             {
                 id: business.id,
@@ -403,10 +424,11 @@ app.post("/login", async(req, res)=>{
             },
             process.env.JWT_SECRET,
             {
-                expiresIn:"1d"
+                expiresIn: "1d"
             }
         );
-        res.status(200).json({
+
+        return res.status(200).json({
             message: "Login successful!",
             token: token,
             business: {
@@ -416,10 +438,10 @@ app.post("/login", async(req, res)=>{
             }
         });
 
-    }catch(error){
-        console.error(error);
+    } catch (error) {
+        console.error("Login error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             message: "Login failed."
         });
     }
